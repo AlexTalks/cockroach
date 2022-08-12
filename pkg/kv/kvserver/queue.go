@@ -78,8 +78,24 @@ func defaultProcessTimeoutFunc(cs *cluster.Settings, _ replicaInQueue) time.Dura
 //
 // The parameter controls which rate(s) to use.
 func makeRateLimitedTimeoutFunc(rateSettings ...*settings.ByteSizeSetting) queueProcessTimeoutFunc {
+	return makeRateLimitedTimeoutFuncBySlowdownMultiplier(permittedRangeScanSlowdown, queueGuaranteedProcessingTimeBudget, nil, rateSettings...)
+}
+
+// TODO(sarkesian): document
+func makeRateLimitedTimeoutFuncBySlowdownMultiplier(
+	slowdownMultiplier int64,
+	minimumTimeoutSetting *settings.DurationSetting,
+	slowdownMultiplierSetting *settings.IntSetting,
+	rateSettings ...*settings.ByteSizeSetting,
+) queueProcessTimeoutFunc {
 	return func(cs *cluster.Settings, r replicaInQueue) time.Duration {
-		minimumTimeout := queueGuaranteedProcessingTimeBudget.Get(&cs.SV)
+		minimumTimeout := time.Duration(0)
+		if minimumTimeoutSetting != nil {
+			minimumTimeout = minimumTimeoutSetting.Get(&cs.SV)
+		}
+		if slowdownMultiplierSetting != nil {
+			slowdownMultiplier = slowdownMultiplierSetting.Get(&cs.SV)
+		}
 		// NB: In production code this will type assertion will always succeed.
 		// Some tests set up a fake implementation of replicaInQueue in which
 		// case we fall back to the configured minimum timeout.
@@ -95,7 +111,7 @@ func makeRateLimitedTimeoutFunc(rateSettings ...*settings.ByteSizeSetting) queue
 			}
 		}
 		estimatedDuration := time.Duration(repl.GetMVCCStats().Total()/minSnapshotRate) * time.Second
-		timeout := estimatedDuration * permittedRangeScanSlowdown
+		timeout := estimatedDuration * time.Duration(slowdownMultiplier)
 		if timeout < minimumTimeout {
 			timeout = minimumTimeout
 		}

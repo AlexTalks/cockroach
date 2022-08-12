@@ -14,6 +14,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing"
+	"github.com/cockroachdb/cockroach/pkg/util/tracing/tracingpb"
 	"sync/atomic"
 	"time"
 
@@ -69,6 +71,17 @@ var MinLeaseTransferInterval = settings.RegisterDurationSetting(
 		"replica to be removed from a range.",
 	1*time.Second,
 	settings.NonNegativeDuration,
+)
+
+// TODO(sarkesian): describe
+var SlowReplicateProcessThreshold = settings.RegisterIntSetting(
+	settings.SystemOnly,
+	"kv.replicate.queue_process_logging_threshold",
+	"multiplier of estimated replica processing duration, "+
+		"given snapshot rate settings, above which to output traces to logs "+
+		"(set to 0 to disable).",
+	0,
+	settings.NonNegativeInt,
 )
 
 var (
@@ -510,17 +523,19 @@ type replicateQueue struct {
 	purgCh <-chan time.Time
 	// updateCh is signalled every time there is an update to the cluster's store
 	// descriptors.
-	updateCh          chan time.Time
-	lastLeaseTransfer atomic.Value // read and written by scanner & queue goroutines
+	updateCh               chan time.Time
+	lastLeaseTransfer      atomic.Value // read and written by scanner & queue goroutines
+	logTracesThresholdFunc queueProcessTimeoutFunc
 }
 
 // newReplicateQueue returns a new instance of replicateQueue.
 func newReplicateQueue(store *Store, allocator allocatorimpl.Allocator) *replicateQueue {
 	rq := &replicateQueue{
-		metrics:   makeReplicateQueueMetrics(),
-		allocator: allocator,
-		purgCh:    time.NewTicker(replicateQueuePurgatoryCheckInterval).C,
-		updateCh:  make(chan time.Time, 1),
+		metrics:                makeReplicateQueueMetrics(),
+		allocator:              allocator,
+		purgCh:                 time.NewTicker(replicateQueuePurgatoryCheckInterval).C,
+		updateCh:               make(chan time.Time, 1),
+		logTracesThresholdFunc: makeRateLimitedTimeoutFuncBySlowdownMultiplier(0, nil, SlowReplicateProcessThreshold, rebalanceSnapshotRate, recoverySnapshotRate),
 	}
 	store.metrics.registry.AddMetricStruct(&rq.metrics)
 	rq.baseQueue = newBaseQueue(
@@ -661,7 +676,7 @@ func (rq *replicateQueue) process(
 	// usually signaling that a rebalancing reservation could not be made with the
 	// selected target.
 	for r := retry.StartWithCtx(ctx, retryOpts); r.Next(); {
-		requeue, err := rq.processOneChange(
+		requeue, err := rq.processOneChangeWithTracing(
 			ctx, repl, rq.canTransferLeaseFrom, false /* scatter */, false, /* dryRun */
 		)
 		if isSnapshotError(err) {
@@ -736,6 +751,38 @@ type decommissionPurgatoryError struct{ error }
 func (decommissionPurgatoryError) PurgatoryErrorMarker() {}
 
 var _ PurgatoryError = decommissionPurgatoryError{}
+
+// TODO(sarkesian): document
+func (rq *replicateQueue) processOneChangeWithTracing(
+	ctx context.Context,
+	repl *Replica,
+	canTransferLeaseFrom func(ctx context.Context, repl *Replica) bool,
+	scatter, dryRun bool,
+) (requeue bool, err error) {
+	var sp *tracing.Span
+	ctx, sp = tracing.EnsureChildSpan(ctx, rq.baseQueue.Tracer, "replicate queue process one change")
+	processStart := timeutil.Now()
+	loggingThresholdMultiplier := SlowReplicateProcessThreshold.Get(&rq.store.cfg.Settings.SV)
+	if loggingThresholdMultiplier > 0 {
+		sp.SetRecordingType(tracingpb.RecordingVerbose)
+	}
+	defer func() {
+		processDuration := timeutil.Since(processStart)
+		loggingThreshold := rq.logTracesThresholdFunc(rq.store.cfg.Settings, repl)
+		exceededDuration := loggingThreshold > time.Duration(0) && processDuration > loggingThreshold
+		if err != nil {
+			log.Warningf(ctx, "error processing replica: %+v\ntrace:\n%s", err, sp.FinishAndGetConfiguredRecording())
+		} else if exceededDuration {
+			log.Infof(ctx, "processing replica took %s, exceeding threshold of %s:\n%s", processDuration, loggingThreshold, sp.FinishAndGetConfiguredRecording())
+		} else {
+			sp.Finish()
+		}
+	}()
+	defer sp.Finish()
+
+	requeue, err = rq.processOneChange(ctx, repl, canTransferLeaseFrom, scatter, dryRun)
+	return requeue, err
+}
 
 func (rq *replicateQueue) processOneChange(
 	ctx context.Context,
