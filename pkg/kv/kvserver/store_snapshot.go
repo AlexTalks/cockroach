@@ -18,6 +18,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/multiqueue"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/raftentry"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rditer"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/stateloader"
@@ -654,34 +655,54 @@ func (kvSS *kvBatchSnapshotStrategy) Close(ctx context.Context) {
 	}
 }
 
-// reserveReceiveSnapshot throttles incoming snapshots.
+// reserveReceiveSnapshot throttles incoming snapshots. The cleanup function
+// must always be called even if there is an error.
 func (s *Store) reserveReceiveSnapshot(
 	ctx context.Context, header *kvserverpb.SnapshotRequest_Header,
 ) (_cleanup func(), _err error) {
 	ctx, sp := tracing.EnsureChildSpan(ctx, s.cfg.Tracer(), "reserveSnapshot")
 	defer sp.Finish()
+	requestSource := int32(header.SenderQueueName)
+	requestPriority := header.SenderQueuePriority
+	// NB: This check is here for mixed mode between a v22.2+ system with an
+	// older system. In that case, the SenderQueueName will be 0, even for a
+	// Raft snapshot. If we detect this, set the type to non-zero so it will
+	// be prioritized along with raft snapshots. We won't correctly detect
+	// which queue it came from for other vs replicate_queue, however that
+	// is OK since this is no worse than pre-22.2 releases.
+	// TODO(abaptist): Remove this block in v23.1 as this mismatch won't occur.
+	if header.SenderQueueName == kvserverpb.SnapshotRequest_OTHER &&
+		header.Type == kvserverpb.SnapshotRequest_VIA_SNAPSHOT_QUEUE {
+		log.Infof(ctx, "Mismatch on message source and type - assume pre 22.2 sender %v", header)
+		requestSource = int32(kvserverpb.SnapshotRequest_RAFT_SNAPSHOT_QUEUE)
+		requestPriority = 0.0
+	}
+
 	return s.throttleSnapshot(
-		ctx, s.snapshotApplySem, header.RangeSize,
+		ctx, s.snapshotApplySem,
+		int(requestSource), requestPriority,
+		header.RangeSize,
 		header.RaftMessageRequest.RangeID, header.RaftMessageRequest.ToReplica.ReplicaID,
 		s.metrics.RangeSnapshotRecvQueueLength,
 		s.metrics.RangeSnapshotRecvInProgress, s.metrics.RangeSnapshotRecvTotalInProgress,
 	)
 }
 
-// reserveSendSnapshot throttles outgoing snapshots.
+// reserveSendSnapshot throttles outgoing snapshots. The cleanup function must
+// always be called even if there is an error.
 func (s *Store) reserveSendSnapshot(
 	ctx context.Context, req *kvserverpb.DelegateSnapshotRequest, rangeSize int64,
 ) (_cleanup func(), _err error) {
 	ctx, sp := tracing.EnsureChildSpan(ctx, s.cfg.Tracer(), "reserveSendSnapshot")
 	defer sp.Finish()
-	sem := s.initialSnapshotSendSem
-	if req.Type == kvserverpb.SnapshotRequest_VIA_SNAPSHOT_QUEUE {
-		sem = s.raftSnapshotSendSem
-	}
 	if fn := s.cfg.TestingKnobs.BeforeSendSnapshotThrottle; fn != nil {
 		fn()
 	}
-	return s.throttleSnapshot(ctx, sem, rangeSize,
+	requestSource := int32(req.SenderQueueName)
+	requestPriority := req.SenderQueuePriority
+	return s.throttleSnapshot(ctx, s.snapshotSendSem,
+		int(requestSource), requestPriority,
+		rangeSize,
 		req.RangeID, req.DelegatedSender.ReplicaID,
 		s.metrics.RangeSnapshotSendQueueLength,
 		s.metrics.RangeSnapshotSendInProgress, s.metrics.RangeSnapshotSendTotalInProgress,
@@ -690,21 +711,28 @@ func (s *Store) reserveSendSnapshot(
 
 // throttleSnapshot is a helper function to throttle snapshot sending and
 // receiving. The returned closure is used to cleanup the reservation and
-// release its resources.
+// release its resources and must be called even if there is an error.
 func (s *Store) throttleSnapshot(
 	ctx context.Context,
-	snapshotSem chan struct{},
+	semaphore *multiqueue.MultiQueue,
+	requestSource int,
+	requestPriority float64,
 	rangeSize int64,
 	rangeID roachpb.RangeID,
 	replicaID roachpb.ReplicaID,
 	waitingSnapshotMetric, inProgressSnapshotMetric, totalInProgressSnapshotMetric *metric.Gauge,
-) (_cleanup func(), _err error) {
+) (cleanup func(), _err error) {
+	// TODO: Is this necessary
+	cleanup = func() {}
 	tBegin := timeutil.Now()
+	var permit *multiqueue.Permit
 	// Empty snapshots are exempt from rate limits because they're so cheap to
 	// apply. This vastly speeds up rebalancing any empty ranges created by a
 	// RESTORE or manual SPLIT AT, since it prevents these empty snapshots from
 	// getting stuck behind large snapshots managed by the replicate queue.
 	if rangeSize != 0 || s.cfg.TestingKnobs.ThrottleEmptySnapshots {
+		task := semaphore.Add(requestSource, requestPriority)
+		cleanup = func() { semaphore.Cancel(task) }
 		waitingSnapshotMetric.Inc(1)
 		defer waitingSnapshotMetric.Dec(1)
 		queueCtx := ctx
@@ -720,23 +748,24 @@ func (s *Store) throttleSnapshot(
 			defer cancel()
 		}
 		select {
-		case snapshotSem <- struct{}{}:
+		case permit = <-task.GetWaitChan():
 			// Got a spot in the semaphore, continue with sending the snapshot.
 			if fn := s.cfg.TestingKnobs.AfterSendSnapshotThrottle; fn != nil {
 				fn()
 			}
 			log.Event(ctx, "acquired spot in the snapshot semaphore")
 		case <-queueCtx.Done():
+			// We need to cancel the task so that it doesn't ever get a permit.
 			if err := ctx.Err(); err != nil {
-				return nil, errors.Wrap(err, "acquiring snapshot reservation")
+				return cleanup, errors.Wrap(err, "acquiring snapshot reservation")
 			}
-			return nil, errors.Wrapf(
+			return cleanup, errors.Wrapf(
 				queueCtx.Err(),
 				"giving up during snapshot reservation due to %q",
 				snapshotReservationQueueTimeoutFraction.Key(),
 			)
 		case <-s.stopper.ShouldQuiesce():
-			return nil, errors.Errorf("stopped")
+			return cleanup, errors.Errorf("stopped")
 		}
 
 		// Counts non-empty in-progress snapshots.
@@ -771,7 +800,7 @@ func (s *Store) throttleSnapshot(
 
 		if rangeSize != 0 || s.cfg.TestingKnobs.ThrottleEmptySnapshots {
 			inProgressSnapshotMetric.Dec(1)
-			<-snapshotSem
+			semaphore.Release(permit)
 		}
 	}, nil
 }
@@ -945,10 +974,10 @@ func (s *Store) receiveSnapshot(
 	}
 
 	cleanup, err := s.reserveReceiveSnapshot(ctx, header)
+	defer cleanup()
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 
 	// The comment on ReplicaPlaceholder motivates and documents
 	// ReplicaPlaceholder semantics. Please be familiar with them
