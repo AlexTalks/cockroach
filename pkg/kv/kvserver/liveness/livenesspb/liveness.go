@@ -95,6 +95,27 @@ func (c MembershipStatus) String() string {
 	}
 }
 
+func (l NodeLivenessStatus) PrettyString() string {
+	switch l {
+	case NodeLivenessStatus_UNKNOWN:
+		return "unknown"
+	case NodeLivenessStatus_DEAD:
+		return "dead"
+	case NodeLivenessStatus_UNAVAILABLE:
+		return "unavailable"
+	case NodeLivenessStatus_LIVE:
+		return "live"
+	case NodeLivenessStatus_DECOMMISSIONING:
+		return "decommissioning"
+	case NodeLivenessStatus_DECOMMISSIONED:
+		return "decommissioned"
+	case NodeLivenessStatus_DRAINING:
+		return "draining"
+	default:
+		panic("unknown node liveness status")
+	}
+}
+
 // ValidateTransition validates transitions of the liveness record,
 // returning an error if the proposed transition is invalid. Ignoring no-ops
 // (which also includes decommissioning a decommissioned node) the valid state
