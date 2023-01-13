@@ -15,6 +15,7 @@ package spanconfigsqltranslator
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
@@ -187,7 +188,7 @@ func (s *SQLTranslator) generateSystemSpanConfigRecords(
 		}
 		clusterSystemRecord, err := spanconfig.MakeRecord(
 			spanconfig.MakeTargetFromSystemTarget(systemTarget),
-			roachpb.SpanConfig{GCPolicy: roachpb.GCPolicy{ProtectionPolicies: clusterProtections}})
+			roachpb.SpanConfig{GCPolicy: roachpb.GCPolicy{ProtectionPolicies: clusterProtections}, Origin: "SQLTranslator"})
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +206,7 @@ func (s *SQLTranslator) generateSystemSpanConfigRecords(
 		tenantSystemRecord, err := spanconfig.MakeRecord(
 			spanconfig.MakeTargetFromSystemTarget(systemTarget),
 			roachpb.SpanConfig{GCPolicy: roachpb.GCPolicy{
-				ProtectionPolicies: tenantProtection.GetTenantProtections()}})
+				ProtectionPolicies: tenantProtection.GetTenantProtections()}, Origin: "SQLTranslator"})
 		if err != nil {
 			return nil, err
 		}
@@ -309,6 +310,7 @@ func (s *SQLTranslator) generateSpanConfigurationsForNamedZone(
 		return nil, err
 	}
 	spanConfig := zoneConfig.AsSpanConfig()
+	spanConfig.Origin += "-SQLTranslator-GenForZone"
 	var records []spanconfig.Record
 	for _, span := range spans {
 		record, err := spanconfig.MakeRecord(spanconfig.MakeTargetFromSpan(span), spanConfig)
@@ -345,6 +347,8 @@ func (s *SQLTranslator) generateSpanConfigurationsForTable(
 	tableStartKey := s.codec.TablePrefix(uint32(table.GetID()))
 	tableEndKey := tableStartKey.PrefixEnd()
 	tableSpanConfig := zone.AsSpanConfig()
+	tableSpanConfig.Origin += "-SQLTranslator-GenForTable"
+	tableSpanConfig.Origin += fmt.Sprintf("-d%d-p%d", table.GetID(), table.GetParentID())
 	if isSystemDesc {
 		// We enable rangefeeds for system tables; various internal subsystems
 		// (leveraging system tables) rely on rangefeeds to function.
@@ -468,6 +472,7 @@ func (s *SQLTranslator) generateSpanConfigurationsForTable(
 
 		// Add an entry for the subzone.
 		subzoneSpanConfig := zone.Subzones[zone.SubzoneSpans[i].SubzoneIndex].Config.AsSpanConfig()
+		subzoneSpanConfig.Origin += "-SQLTranslator-GenForTable-Subzone"
 		// Copy relevant fields that apply to the table's SpanConfig onto its
 		// SubzoneSpanConfig.
 		subzoneSpanConfig.GCPolicy.ProtectionPolicies = tableSpanConfig.GCPolicy.ProtectionPolicies[:]
@@ -657,6 +662,7 @@ func (s *SQLTranslator) maybeGeneratePseudoTableRecords(
 			return nil, err
 		}
 		tableSpanConfig := zone.AsSpanConfig()
+		tableSpanConfig.Origin += "-SQLTranslator-GenForPseudoTableRecord"
 		var records []spanconfig.Record
 		for _, pseudoTableID := range keys.PseudoTableIDs {
 			tableStartKey := s.codec.TablePrefix(pseudoTableID)

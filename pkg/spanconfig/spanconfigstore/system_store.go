@@ -80,14 +80,14 @@ func (s *systemSpanConfigStore) combine(
 ) (roachpb.SpanConfig, error) {
 	_, tenID, err := keys.DecodeTenantPrefix(roachpb.Key(key))
 	if err != nil {
-		return roachpb.SpanConfig{}, err
+		return roachpb.SpanConfig{Origin: "SystemSpanConfigStore"}, err
 	}
 
 	hostSetOnTenant, err := spanconfig.MakeTenantKeyspaceTarget(
 		roachpb.SystemTenantID, tenID,
 	)
 	if err != nil {
-		return roachpb.SpanConfig{}, err
+		return roachpb.SpanConfig{Origin: "SystemSpanConfigStore"}, err
 	}
 	// Construct a list of system targets that apply to the key given its tenant
 	// prefix. These are:
@@ -104,7 +104,7 @@ func (s *systemSpanConfigStore) combine(
 	if tenID != roachpb.SystemTenantID {
 		target, err := spanconfig.MakeTenantKeyspaceTarget(tenID, tenID)
 		if err != nil {
-			return roachpb.SpanConfig{}, err
+			return roachpb.SpanConfig{Origin: "SystemSpanConfigStore"}, err
 		}
 		targets = append(targets, target)
 	}

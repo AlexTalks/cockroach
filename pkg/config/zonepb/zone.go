@@ -1105,6 +1105,7 @@ func (z ZoneConfig) AsSpanConfig() roachpb.SpanConfig {
 
 func (z *ZoneConfig) toSpanConfig() (roachpb.SpanConfig, error) {
 	var sc roachpb.SpanConfig
+	sc.Origin = "ZoneConfig"
 	var err error
 
 	if err = z.EnsureFullyHydrated(); err != nil {
@@ -1158,13 +1159,13 @@ func (z *ZoneConfig) toSpanConfig() (roachpb.SpanConfig, error) {
 		sc.Constraints = make([]roachpb.ConstraintsConjunction, len(z.Constraints))
 		sc.Constraints, err = toSpanConfigConstraintsConjunction(z.Constraints)
 		if err != nil {
-			return roachpb.SpanConfig{}, err
+			return roachpb.SpanConfig{Origin: "ZoneConfig-constrainterr"}, err
 		}
 	}
 	if len(z.VoterConstraints) != 0 {
 		sc.VoterConstraints, err = toSpanConfigConstraintsConjunction(z.VoterConstraints)
 		if err != nil {
-			return roachpb.SpanConfig{}, err
+			return roachpb.SpanConfig{Origin: "ZoneConfig-vconstrainterr"}, err
 		}
 	}
 
@@ -1173,7 +1174,7 @@ func (z *ZoneConfig) toSpanConfig() (roachpb.SpanConfig, error) {
 		for i, leasePreference := range z.LeasePreferences {
 			sc.LeasePreferences[i].Constraints, err = toSpanConfigConstraints(leasePreference.Constraints)
 			if err != nil {
-				return roachpb.SpanConfig{}, err
+				return roachpb.SpanConfig{Origin: "ZoneConfig-leasepreferr"}, err
 			}
 		}
 	}

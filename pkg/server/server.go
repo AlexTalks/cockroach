@@ -566,6 +566,7 @@ func NewServer(cfg Config, stopper *stop.Stopper) (*Server, error) {
 			// rangefeeds. Until then, we simply allow rangefeeds when a more
 			// targeted config is not found.
 			fallbackConf := cfg.DefaultZoneConfig.AsSpanConfig()
+			fallbackConf.Origin += "-fallback"
 			fallbackConf.RangefeedEnabled = true
 			// We do the same for opting out of strict GC enforcement; it
 			// really only applies to user table ranges
@@ -617,8 +618,11 @@ func NewServer(cfg Config, stopper *stop.Stopper) (*Server, error) {
 		protectedTSReader = spanconfigptsreader.NewAdapter(protectedtsProvider.(*ptprovider.Provider).Cache, spanConfig.subscriber)
 	}
 
+	dfltSc := cfg.DefaultZoneConfig.AsSpanConfig()
+	dfltSc.Origin += "-StoreDefault"
+
 	storeCfg := kvserver.StoreConfig{
-		DefaultSpanConfig:        cfg.DefaultZoneConfig.AsSpanConfig(),
+		DefaultSpanConfig:        dfltSc,
 		Settings:                 st,
 		AmbientCtx:               cfg.AmbientCtx,
 		RaftConfig:               cfg.RaftConfig,

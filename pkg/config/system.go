@@ -337,9 +337,12 @@ func (s *SystemConfig) GetSpanConfigForKey(
 ) (roachpb.SpanConfig, error) {
 	id, zone, err := s.getZoneConfigForKey(keys.SystemSQLCodec, key)
 	if err != nil {
-		return roachpb.SpanConfig{}, err
+		return roachpb.SpanConfig{
+			Origin: "SystemConfig",
+		}, err
 	}
 	spanConfig := zone.AsSpanConfig()
+	spanConfig.Origin += "-SystemConfig"
 	if id <= keys.MaxReservedDescID {
 		// We enable rangefeeds for system tables; various internal subsystems
 		// (leveraging system tables) rely on rangefeeds to function. We also do the

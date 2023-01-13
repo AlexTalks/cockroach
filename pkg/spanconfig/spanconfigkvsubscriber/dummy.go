@@ -58,7 +58,7 @@ func (n *noopKVSubscriber) ComputeSplitKey(
 func (n *noopKVSubscriber) GetSpanConfigForKey(
 	context.Context, roachpb.RKey,
 ) (roachpb.SpanConfig, error) {
-	return roachpb.SpanConfig{}, nil
+	return roachpb.SpanConfig{Origin: "NoopDummy"}, nil
 }
 
 // GetProtectionTimestamps is part of the spanconfig.KVSubscriber interface.

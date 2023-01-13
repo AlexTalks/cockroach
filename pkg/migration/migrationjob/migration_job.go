@@ -97,6 +97,7 @@ func (r resumer) Resume(ctx context.Context, execCtxI interface{}) error {
 		tenantDeps.SpanConfig.KVAccessor = execCtx.ExecCfg().SpanConfigKVAccessor
 		tenantDeps.SpanConfig.Splitter = execCtx.ExecCfg().SpanConfigSplitter
 		tenantDeps.SpanConfig.Default = execCtx.ExecCfg().DefaultZoneConfig.AsSpanConfig()
+		tenantDeps.SpanConfig.Default.Origin += "-Migration"
 
 		err = m.Run(ctx, cv, tenantDeps, r.j)
 	default:

@@ -151,6 +151,7 @@ func CreateTenantRecord(
 	//      tenant's reconciliation process.
 
 	tenantSpanConfig := initialTenantZoneConfig.AsSpanConfig()
+	tenantSpanConfig.Origin += "-CreateTenantRecord"
 	// Make sure to enable rangefeeds; the tenant will need them on its system
 	// tables as soon as it starts up. It's not unsafe/buggy if we didn't do this,
 	// -- the tenant's span config reconciliation process would eventually install

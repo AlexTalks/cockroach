@@ -34,20 +34,20 @@ import (
 //
 // Sample usage:
 //
-//   w := tenantsettingswatcher.New(...)
-//   if err := w.Start(ctx); err != nil { ... }
+//	w := tenantsettingswatcher.New(...)
+//	if err := w.Start(ctx); err != nil { ... }
 //
-//   // Get overrides and keep them up to date.
-//   all, allCh := w.AllTenantOverrides()
-//   tenant, tenantCh := w.TenantOverrides(tenantID)
-//   select {
-//   case <-allCh:
-//     all, allCh = w.AllTenantOverrides()
-//   case <-tenantCh:
-//     tenant, tenantCh = w.TenantOverrides(tenantID)
-//   case <-ctx.Done():
-//     ...
-//   }
+//	// Get overrides and keep them up to date.
+//	all, allCh := w.AllTenantOverrides()
+//	tenant, tenantCh := w.TenantOverrides(tenantID)
+//	select {
+//	case <-allCh:
+//	  all, allCh = w.AllTenantOverrides()
+//	case <-tenantCh:
+//	  tenant, tenantCh = w.TenantOverrides(tenantID)
+//	case <-ctx.Done():
+//	  ...
+//	}
 type Watcher struct {
 	clock   *hlc.Clock
 	f       *rangefeed.Factory
@@ -146,6 +146,8 @@ func (w *Watcher) startRangeFeed(
 		Key:    tenantSettingsTablePrefix,
 		EndKey: tenantSettingsTablePrefix.PrefixEnd(),
 	}
+
+	log.Infof(ctx, "tenantsettingswatcher requesting table %d, span: %s", tableID, tenantSettingsTableSpan)
 
 	var initialScan = struct {
 		ch   chan struct{}

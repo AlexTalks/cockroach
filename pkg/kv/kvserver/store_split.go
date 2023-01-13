@@ -13,7 +13,7 @@ package kvserver
 import (
 	"bytes"
 	"context"
-
+	"fmt"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/stateloader"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/storage"
@@ -334,7 +334,8 @@ func (s *Store) SplitRange(
 		// Update the replica's cached byte thresholds. This is a no-op if the system
 		// config is not available, in which case we rely on the next gossip update
 		// to perform the update.
-		if err := rightRepl.updateRangeInfo(ctx, rightRepl.Desc()); err != nil {
+		rCtx := context.WithValue(ctx, "split", fmt.Sprintf("r%d-r%d", leftRepl.RangeID, rightRepl.RangeID))
+		if err := rightRepl.updateRangeInfo(rCtx, rightRepl.Desc()); err != nil {
 			return err
 		}
 		// Add the range to metrics and maybe gossip on capacity change.

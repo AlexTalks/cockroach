@@ -12,6 +12,8 @@ package kvserver
 
 import (
 	"context"
+	"fmt"
+	"github.com/cockroachdb/cockroach/pkg/config"
 	"math"
 	"time"
 
@@ -727,6 +729,14 @@ func (r *Replica) updateRangeInfo(ctx context.Context, desc *roachpb.RangeDescri
 	conf, err := confReader.GetSpanConfigForKey(ctx, desc.StartKey)
 	if err != nil {
 		return errors.Wrapf(err, "%s: failed to lookup span config", r)
+	}
+	conf.Origin += "-updateRangeInfo"
+	if val := ctx.Value("split"); val != nil {
+		conf.Origin += fmt.Sprintf("split-%s", val.(string))
+	}
+	startKeyObjID, _, ok := config.DecodeObjectID(keys.SystemSQLCodec, desc.StartKey)
+	if ok && startKeyObjID > keys.MaxReservedDescID {
+		log.VEventf(ctx, 2, "setting conf for %s: %s", desc, conf)
 	}
 
 	r.SetSpanConfig(conf)

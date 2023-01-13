@@ -246,6 +246,7 @@ func (k *KVAccessor) getSpanConfigRecordsWithTxn(
 			if err := protoutil.Unmarshal(([]byte)(*row[2].(*tree.DBytes)), &conf); err != nil {
 				return err
 			}
+			conf.Origin = "KVAccessor"
 
 			record, err := spanconfig.MakeRecord(spanconfig.DecodeTarget(span), conf)
 			if err != nil {

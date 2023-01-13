@@ -185,7 +185,9 @@ message SpanConfig {
   // serviced in KV, to decide whether or not to send back any row data.
   bool exclude_data_from_backup = 11;
 
-  // Next ID: 12
+  string origin = 12;
+
+  // Next ID: 13
   //
   // When adding a field, also add a check a to `ValidateSystemTargetSpanConfig`
   // if it is not expected to be set on a SpanConfig corresponding to a

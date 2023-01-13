@@ -51,6 +51,7 @@ func (sd *spanConfigDecoder) decode(kv roachpb.KeyValue) (spanconfig.Record, err
 	// First we need to decode the start_key field from the index key.
 	var rawSp roachpb.Span
 	var conf roachpb.SpanConfig
+	conf.Origin = "SpanConfigDecoder"
 	{
 		types := []*types.T{sd.columns[0].GetType()}
 		startKeyRow := make([]rowenc.EncDatum, 1)
